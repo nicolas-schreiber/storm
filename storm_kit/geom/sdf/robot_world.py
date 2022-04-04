@@ -175,14 +175,14 @@ class RobotWorldCollisionVoxel():
     '''
     This class can check collision between robot and sdf grid of camera pointcloud.
     '''
-    def __init__(self, robot_collision_params, batch_size, label_map, bounds=None, grid_resolution=0.02,
+    def __init__(self, robot_collision_params, robot_batch_size, label_map, bounds=None, grid_resolution=0.02,
                  tensor_args={'device':torch.device('cpu'), 'dtype':torch.float32}):
 
 
-        self.robot = RobotMeshCollision(robot_collision_params, batch_size, tensor_args)
-        self.robot_sphere_model = RobotSphereCollision(robot_collision_params, batch_size, tensor_args)
+        self.robot = RobotMeshCollision(robot_collision_params, robot_batch_size, tensor_args)
+        self.robot_sphere_model = RobotSphereCollision(robot_collision_params, robot_batch_size, tensor_args)
         self._batch_table_link_rot = None
-        self.batch_size = batch_size
+        self.robot_batch_size = robot_batch_size
         self.res = None
         self.tensor_args = tensor_args
         self.device = self.tensor_args['device']
@@ -240,6 +240,10 @@ class RobotWorldCollisionVoxel():
                                                               link_trans)
         return table_link_trans, table_link_rot
 
+    def build_batch_features(self, batch_size, clone_pose=True, clone_points=True):
+        self.batch_size = batch_size
+        self.robot_sphere_model.build_batch_features(clone_objs=clone_points, batch_size=batch_size)
+
     def check_robot_sphere_collisions(self, link_trans, link_rot):
         """Checks collision between robot spheres and pointcloud sdf grid
 
@@ -250,27 +254,37 @@ class RobotWorldCollisionVoxel():
         Returns:
             [type]: [description]
         """        
-        table_link_trans, table_link_rot = self.transform_to_table(link_trans, link_rot)
-        
+        table_link_trans, table_link_rot = link_trans, link_rot
+
+        batch_size = table_link_trans.shape[0]
+        # update link pose:
+        if(self.robot_batch_size != batch_size):
+            self.robot_batch_size = batch_size
+            self.build_batch_features(self.robot_batch_size, clone_pose=True, clone_points=True)
+
         self.robot_sphere_model.update_batch_robot_collision_objs(table_link_trans, table_link_rot)
+
+        # get points:
+        # pts: batch, n_links, n_pts, 3
+        w_link_spheres = self.robot_sphere_model.get_batch_robot_link_spheres()              
+        
+        n_links = len(w_link_spheres)
+        print('LINKSSSS', n_links)
 
         if(self.res is None or self.res.shape[0] != link_trans.shape[0]):
             self.res = torch.zeros((link_trans.shape[0], link_trans.shape[1]), **self.tensor_args)
             
         res = self.res
 
-        # get points:
-        # pts: batch, n_links, n_pts, 3
-        w_link_spheres = self.robot_sphere_model.get_batch_robot_link_spheres()
 
-        
-        
         n_links = len(w_link_spheres)
         
         for i in range(n_links):
             spheres = w_link_spheres[i]
             b, n, _ = spheres.shape
             spheres_arr = spheres.view(b * n, 4)
+
+            # compute distance between world objs and link spheres
             sdf = self.world.check_pts_sdf(spheres_arr[:,:3])
             sdf = sdf + spheres_arr[:,3]
             sdf = sdf.view(b,n)

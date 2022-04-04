@@ -23,6 +23,8 @@
 import torch
 import torch.nn as nn
 # import torch.nn.functional as F
+import os
+import numpy as np
 
 from ...differentiable_robot_model.coordinate_transform import CoordinateTransform, quaternion_to_matrix
 
@@ -30,11 +32,15 @@ from ...util_file import get_assets_path, join_path
 from ...geom.sdf.robot_world import RobotWorldCollisionVoxel
 from .gaussian_projection import GaussianProjection
 
-class VoxelCollisionCost(nn.Module):
+from scenecollisionnet.collision_models.collision_nets import SceneCollisionNet
+from scenecollisionnet.policy.collision_checker import NNSceneCollisionChecker
+from scenecollisionnet.policy.robot import Robot as SCNRobot
+
+class SceneCollisionNetCost(nn.Module):
     def __init__(self, weight=None, robot_params=None,
                  gaussian_params={}, grid_resolution=0.05, distance_threshold=-0.01, 
                  batch_size=2, tensor_args={'device':torch.device('cpu'), 'dtype':torch.float32}):
-        super(VoxelCollisionCost, self).__init__()
+        super(SceneCollisionNetCost, self).__init__()
         self.tensor_args = tensor_args
         self.device = tensor_args['device']
         self.float_dtype = tensor_args['dtype']
@@ -53,17 +59,23 @@ class VoxelCollisionCost(nn.Module):
         # load nn params:
         label_map = robot_params['world_collision_params']['label_map']
         bounds = robot_params['world_collision_params']['bounds']
-        #model_path = robot_params['world_collision_params']['model_path']
+        model_path = robot_params['world_collision_params']['model_path']
         self.threshold = robot_params['robot_collision_params']['threshold']
         self.batch_size = batch_size
         
+        self.robot = SCNRobot(robot_collision_params['urdf'], 'right_gripper', self.device)
+        
         # initialize NN model:
-        self.coll = RobotWorldCollisionVoxel(robot_collision_params, self.batch_size,
-                                             label_map, bounds, grid_resolution=grid_resolution,
-                                             tensor_args=self.tensor_args)
+        self.coll = NNSceneCollisionChecker(
+            model_path=model_path, 
+            robot=self.robot, 
+            device=self.device, 
+            use_knn=False
+        )
+        
 
         #self.coll.set_robot_objects()
-        self.coll.build_batch_features(self.batch_size, clone_pose=True, clone_points=True)
+        # self.coll.build_batch_features(self.batch_size, clone_pose=True, clone_points=True)
         
         self.COLL_INIT = False
         self.SCENE_INIT = False
@@ -92,7 +104,21 @@ class VoxelCollisionCost(nn.Module):
         if(not self.COLL_INIT):
             self.first_run(camera_data)
         self.camera_data = camera_data
-        self.coll.set_scene(camera_data['pc'], camera_data['pc_seg'])
+
+        rtm = np.eye(4)
+        
+        print(camera_data['pc_seg'])
+        
+        in_obs = {
+            "pc": camera_data['pc'],
+            "pc_label": camera_data['pc_seg'],
+            "label_map": {},
+            "camera_pose": camera_data['robot_camera_pose'],
+            "robot_to_model": rtm,
+            "model_to_robot": np.linalg.inv(rtm),
+        }
+        self.coll.set_scene(in_obs)
+
         self.SCENE_INIT = True
 
 
@@ -102,24 +128,17 @@ class VoxelCollisionCost(nn.Module):
         n_links = link_pos_seq.shape[2]
         link_pos = link_pos_seq.view(batch_size * horizon, n_links, 3)
         link_rot = link_rot_seq.view(batch_size * horizon, n_links, 3, 3)
-        #print(link_pos.shape, link_rot.shape)
+        print('####', link_pos.shape, link_rot.shape)
         if(self.batch_size != batch_size):
             self.batch_size = batch_size
-            self.coll.build_batch_features(self.batch_size*horizon, clone_pose=True, clone_points=True)
         
-        res = self.coll.check_robot_sphere_collisions(link_pos, link_rot)
+        print("@", link_rot_seq.shape)
+        coll_mask = self.coll(link_rot)
+        coll_mask |= self.coll(link_rot, threshold=0.45)
+
         self.res = res
         res = res.view(batch_size, horizon, n_links)
-        # res = [batch,link]
         
-        # negative res is outside mesh (not colliding)
-        res += self.distance_threshold
-        res[res <= 0.0] = 0.0
-
-        res[res >= 0.5] = 0.5
-
-        # rescale:
-        res = res / 0.25
 
         # all values are positive now
         res = torch.sum(res, dim=-1)

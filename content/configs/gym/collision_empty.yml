@@ -1,0 +1,10 @@
+world_model:
+  coll_objs:
+    sphere:
+      sphere1:
+        radius: 0.001 #5 # meters
+        position: [10.2, -0.0, 0.4]
+    cube:
+      table:
+        dims: [2.0, 2.0, 0.2] # x, y, z
+        pose: [-0.1, -0.1, -0.1, 0, 0, 0, 1.0] # x, y, z, qx, qy, qz, qw

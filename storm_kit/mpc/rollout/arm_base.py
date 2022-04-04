@@ -26,7 +26,7 @@ import torch.autograd.profiler as profiler
 from ..cost import DistCost, PoseCost, ProjectedDistCost, JacobianCost, ZeroCost, EEVelCost, StopCost, FiniteDifferenceCost
 from ..cost.bound_cost import BoundCost
 from ..cost.manipulability_cost import ManipulabilityCost
-from ..cost import CollisionCost, VoxelCollisionCost, PrimitiveCollisionCost
+from ..cost import CollisionCost, VoxelCollisionCost, PrimitiveCollisionCost, SceneCollisionNetCost
 from ..model import URDFKinematicModel
 from ...util_file import join_path, get_assets_path
 from ...differentiable_robot_model.coordinate_transform import matrix_to_quaternion, quaternion_to_matrix
@@ -42,7 +42,7 @@ class ArmBase(RolloutBase):
     1. Update exp_params to be kwargs
     """
 
-    def __init__(self, exp_params, tensor_args={'device':"cpu", 'dtype':torch.float32}, world_params=None):
+    def __init__(self, exp_params, tensor_args={'device':"cpu", 'dtype':torch.double}, world_params=None):
         self.tensor_args = tensor_args
         self.exp_params = exp_params
         mppi_params = exp_params['mppi']
@@ -119,6 +119,9 @@ class ArmBase(RolloutBase):
             self.voxel_collision_cost = VoxelCollisionCost(robot_params=robot_params,
                                                            tensor_args=self.tensor_args,
                                                            **self.exp_params['cost']['voxel_collision'])
+            self.scene_collision_cost = SceneCollisionNetCost(robot_params=robot_params,
+                                                              tensor_args=self.tensor_args,
+                                                              **self.exp_params['cost']['voxel_collision'])
             
         if(exp_params['cost']['primitive_collision']['weight'] > 0.0):
             self.primitive_collision_cost = PrimitiveCollisionCost(world_params=world_params, robot_params=robot_params, tensor_args=self.tensor_args, **self.exp_params['cost']['primitive_collision'])
@@ -147,10 +150,12 @@ class ArmBase(RolloutBase):
         
         retract_state = self.retract_state
         
-        
+        for key in state_dict:
+            print(key, state_dict[key].shape)
         
         J_full = torch.cat((lin_jac_batch, ang_jac_batch), dim=-2)
-        
+        link_pos_batch_full = torch.cat((link_pos_batch, ee_pos_batch), dim=-2)
+        link_rot_batch_full = torch.cat((link_rot_batch, ee_rot_batch), dim=-3)
 
         #null-space cost
         #if self.exp_params['cost']['null_space']['weight'] > 0:
@@ -204,8 +209,9 @@ class ArmBase(RolloutBase):
                 coll_cost = self.primitive_collision_cost.forward(link_pos_batch, link_rot_batch)
                 cost += coll_cost
             if self.exp_params['cost']['voxel_collision']['weight'] > 0:
-                coll_cost = self.voxel_collision_cost.forward(link_pos_batch, link_rot_batch)
-                cost += coll_cost
+                # coll_cost = self.voxel_collision_cost.forward(link_pos_batch, link_rot_batch)
+                scene_collision_cost = self.scene_collision_cost.forward(link_pos_batch_full, link_rot_batch_full)
+                cost += scene_collision_cost
 
         
         return cost

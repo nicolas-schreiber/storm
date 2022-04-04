@@ -56,6 +56,7 @@ class WorldGridCollision(WorldCollision):
         self.pitch = self.grid_resolution
         self.scene_sdf = None
         self.scene_sdf_matrix = None
+        self.trimesh_scene_mesh = None
 
     def update_world_sdf(self):
         sdf_grid = self._compute_sdfgrid()
@@ -147,6 +148,21 @@ class WorldGridCollision(WorldCollision):
         Args:
         pts: [n,3]
         '''
+        
+        if self.trimesh_scene_mesh != None:
+            pts_pc = trimesh.PointCloud(pts.cpu().numpy())
+
+            pts_mesh = trimesh.voxel.ops.points_to_marching_cubes(pts_pc.vertices, pitch=self.grid_resolution)
+            self.trimesh_scene_mesh.split()
+
+            for facet in self.trimesh_scene_mesh.facets:
+                self.trimesh_scene_mesh.visual.face_colors[facet] = trimesh.visual.random_color()
+
+            # (self.trimesh_scene_mesh + pts_mesh).show()
+        else:
+            print("without", pts.cpu().numpy().shape)
+
+
         #print(self.bounds, self.pitch)
         in_bounds = (pts > self.bounds[0] + self.pitch).all(dim=-1)
         in_bounds &= (pts < self.bounds[1] - self.pitch).all(dim=-1)
@@ -399,7 +415,7 @@ class WorldPointCloudCollision(WorldGridCollision):
         
     def get_signed_distance(self, pts):
         dist = trimesh.proximity.signed_distance(self.trimesh_scene_mesh, pts.cpu().numpy())
-        return dist
+        return torch.tensor(dist)
     
     def get_scene_pts_from_voxelgrid(self):
 
