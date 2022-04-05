@@ -33,7 +33,7 @@ from ...geom.sdf.robot_world import RobotWorldCollisionVoxel
 from .gaussian_projection import GaussianProjection
 
 from scenecollisionnet.collision_models.collision_nets import SceneCollisionNet
-from scenecollisionnet.policy.collision_checker import NNSceneCollisionChecker
+from scenecollisionnet.policy.collision_checker import NNStormSceneCollisionChecker
 from scenecollisionnet.policy.robot import Robot as SCNRobot
 
 class SceneCollisionNetCost(nn.Module):
@@ -66,7 +66,7 @@ class SceneCollisionNetCost(nn.Module):
         self.robot = SCNRobot(robot_collision_params['urdf'], 'right_gripper', self.device)
         
         # initialize NN model:
-        self.coll = NNSceneCollisionChecker(
+        self.coll = NNStormSceneCollisionChecker(
             model_path=model_path, 
             robot=self.robot, 
             device=self.device, 
@@ -82,27 +82,8 @@ class SceneCollisionNetCost(nn.Module):
         self.camera_data = None
         self.res = None
         self.t_mat = None
-    def first_run(self, camera_data):
-        
-        # set world transforms:
-        quat = camera_data['robot_camera_pose'][3:]
-        rot = quaternion_to_matrix(torch.as_tensor([quat[3],quat[0], quat[1], quat[2]]).unsqueeze(0))
-
-        robot_camera_trans = torch.tensor(camera_data['robot_camera_pose'][0:3]).unsqueeze(0)
-        robot_camera_rot = torch.tensor(rot)
-
-        robot_table_trans = torch.tensor([0.0,0.0,0.0]).unsqueeze(0)
-        robot_table_rot = torch.eye(3).unsqueeze(0)
-        self.coll.set_world_transform(robot_table_trans, robot_table_rot,
-                                      robot_camera_trans, robot_camera_rot)
-
-        self.coll.set_scene(camera_data['pc'], camera_data['pc_seg'])
-
-        self.COLL_INIT = True
 
     def set_scene(self, camera_data):
-        if(not self.COLL_INIT):
-            self.first_run(camera_data)
         self.camera_data = camera_data
 
         rtm = np.eye(4)
@@ -112,7 +93,7 @@ class SceneCollisionNetCost(nn.Module):
         in_obs = {
             "pc": camera_data['pc'],
             "pc_label": camera_data['pc_seg'],
-            "label_map": {},
+            "label_map": camera_data['label_map'],
             "camera_pose": camera_data['robot_camera_pose'],
             "robot_to_model": rtm,
             "model_to_robot": np.linalg.inv(rtm),
@@ -133,8 +114,8 @@ class SceneCollisionNetCost(nn.Module):
             self.batch_size = batch_size
         
         print("@", link_rot_seq.shape)
-        coll_mask = self.coll(link_rot)
-        coll_mask |= self.coll(link_rot, threshold=0.45)
+        coll_mask = self.coll(link_pos, link_rot)
+        coll_mask |= self.coll(link_pos, link_rot, threshold=0.45)
 
         self.res = res
         res = res.view(batch_size, horizon, n_links)

@@ -116,9 +116,9 @@ class ArmBase(RolloutBase):
                                                     tensor_args=self.tensor_args)
 
         if(self.exp_params['cost']['voxel_collision']['weight'] > 0):
-            self.voxel_collision_cost = VoxelCollisionCost(robot_params=robot_params,
-                                                           tensor_args=self.tensor_args,
-                                                           **self.exp_params['cost']['voxel_collision'])
+            # self.voxel_collision_cost = VoxelCollisionCost(robot_params=robot_params,
+            #                                                tensor_args=self.tensor_args,
+            #                                                **self.exp_params['cost']['voxel_collision'])
             self.scene_collision_cost = SceneCollisionNetCost(robot_params=robot_params,
                                                               tensor_args=self.tensor_args,
                                                               **self.exp_params['cost']['voxel_collision'])
@@ -150,12 +150,15 @@ class ArmBase(RolloutBase):
         
         retract_state = self.retract_state
         
+        batch_size = link_pos_batch.shape[0]
+        horizon = link_pos_batch.shape[1]
+        
         for key in state_dict:
             print(key, state_dict[key].shape)
         
         J_full = torch.cat((lin_jac_batch, ang_jac_batch), dim=-2)
-        link_pos_batch_full = torch.cat((link_pos_batch, ee_pos_batch), dim=-2)
-        link_rot_batch_full = torch.cat((link_rot_batch, ee_rot_batch), dim=-3)
+        link_pos_batch_full = torch.cat((link_pos_batch, ee_pos_batch.view((batch_size, horizon, 1, 3))), dim=-2)
+        link_rot_batch_full = torch.cat((link_rot_batch, ee_rot_batch.view((batch_size, horizon, 1, 3, 3))), dim=-3)
 
         #null-space cost
         #if self.exp_params['cost']['null_space']['weight'] > 0:
